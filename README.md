@@ -1,5 +1,7 @@
 # Collect.py
 
+(Collect.py was inspired by Sean Li's bash script of the same name)
+
 Simple Python script that collects folders and files into a __Collect__ directory at the users perferred location and then creates Symlinks within Category folders for easily finding data stored deep within file structures. 
 
 The script requires a collect.txt file to be placed in any directory that you would like visible to the script, formatted as follows:
