@@ -1,6 +1,9 @@
 import os
 import datetime
 
+#Simple accompanying script to create new collect.txt files in all folders and sub folders within a given path
+#Within each content.txt file the original creation date of that folder will be written in sortable date format
+
 def create_content_file(folder_path):
     content_file = os.path.join(folder_path, 'content.txt')
     if not os.path.exists(content_file):
