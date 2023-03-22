@@ -16,3 +16,5 @@ Category:Category Two
 
 Take note there is no space after the colon.  Also note that you can have as many categories as you would like, the contents of the folder will have a symlink in all categories. 
 
+There are some helper scripts that the user can launch separately, such as new_collect_file.py, to add collect files to all subfolders within a given path. The collect file will be pre-populated with the date in the correct format based on the folders original creation date.  This script also has a --fix command line argument to fix misspelled or mislabled content.txt files as a batch rename. 
+
