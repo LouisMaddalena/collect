@@ -10,8 +10,19 @@ import shutil
 def find_collect_txt_files(path):
     path = os.path.abspath(path)
     for folder, _, files in os.walk(path):
+        if 'collect.txt' in files or '.collect.txt' in files:
+            file_name = 'collect.txt' if 'collect.txt' in files else '.collect.txt'
+            yield os.path.join(folder, file_name)
+            
+#Function to hide collect files from user and other scripts that omit hidden files            
+def hide_collect_txt_files(path):
+    path = os.path.abspath(path)
+    for folder, _, files in os.walk(path):
         if 'collect.txt' in files:
-            yield os.path.join(folder, 'collect.txt')
+            old_path = os.path.join(folder, 'collect.txt')
+            new_path = os.path.join(folder, '.collect.txt')
+            os.rename(old_path, new_path)
+            print(f'Renamed {old_path} to {new_path}')
 
 # Function to parse collect.txt file and extract date and categories
 def parse_collect_txt(file_path):
