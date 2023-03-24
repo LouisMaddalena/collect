@@ -84,16 +84,18 @@ def remove_directories(collect_path):
 # Main function
 def main():
     # Parse command-line arguments
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='Process collect.txt files and create sym links.')
+      parser = argparse.ArgumentParser(description='Process collect.txt files and create sym links.')
     parser.add_argument('-r', '--remove', action='store_true', help='Remove directories that were created')
-    parser.add_argument('-p', '--path', default='/Users/louismaddalena/Documents/', help='Path to search for collect.txt files')
+    parser.add_argument('-p', '--path', default='.', help='Path to search for collect.txt files or .collect.txt files')
     parser.add_argument('-c', '--collect', default='/Users/louismaddalena/Documents/__Collect__', help='Path to create the __Collect__ directory')
-
-
-
+    parser.add_argument('-g', '--hide', action='store_true', help='Hide collect.txt files by renaming them to .collect.txt')
 
     args = parser.parse_args()
+
+    # If the hide flag is set, rename collect.txt files to .collect.txt and return
+    if args.hide:
+        hide_collect_txt_files(args.path)
+        return
 
     # If the remove flag is set, remove the directories and return
     if args.remove:
