@@ -116,6 +116,6 @@ def main():
 
     print(f'Sym links created in {args.collect}')
 
-# Entry point for the script
+
 if __name__ == '__main__':
     main()
