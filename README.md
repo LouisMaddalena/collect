@@ -18,3 +18,6 @@ Take note there is no space after the colon.  Also note that you can have as man
 
 There are some helper scripts that the user can launch separately, such as new_collect_file.py, to add collect files to all subfolders within a given path. The collect file will be pre-populated with the date in the correct format based on the folders original creation date.  This script also has a --fix command line argument to fix misspelled or mislabled content.txt files as a batch rename. 
 
+#Bids_Collect
+
+bids_collect.py is a simialr but differnt execution of a similar idea. Used to keep a list of "Current" folders aggregated in a single location for reducing friction ina given workflow.  Since in this usecase, the folders all share the same name, and the "Current" folders are on a shared drive, using folder name rather than collect.txt is used in this script. 
