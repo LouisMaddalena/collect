@@ -20,4 +20,4 @@ There are some helper scripts that the user can launch separately, such as new_c
 
 # Bids_Collect
 
-bids_collect.py is a simialr but differnt execution of a similar idea. Used to keep a list of "Current" folders aggregated in a single location for reducing friction ina given workflow.  Since in this usecase, the folders all share the same name, and the "Current" folders are on a shared drive, using folder name rather than collect.txt is used in this script. 
+bids_collect.py is a simialr but differnt execution of a same idea. Used to keep a list of "Current" folders aggregated in a single location for reducing friction ina given workflow.  Since in this usecase, the folders all share the same name, and the "Current" folders are on a shared drive, using folder name rather than collect.txt is used in this script. 
