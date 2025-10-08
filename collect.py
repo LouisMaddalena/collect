@@ -1,121 +1,301 @@
-import os
-import sys
+#!/usr/bin/env python3
 import argparse
 from pathlib import Path
 import shutil
+from datetime import date as _date
 
-#inspired by Sean Li's bash script called "Collect"
+try:
+    import yaml  # pip install pyyaml
+    _HAVE_YAML = True
+except Exception:
+    _HAVE_YAML = False
 
-# Function to find collect.txt files in the given directory and its subdirectories
-def find_collect_txt_files(path):
-    path = os.path.abspath(path)
-    for folder, _, files in os.walk(path):
-        if 'collect.txt' in files or '.collect.txt' in files:
-            file_name = 'collect.txt' if 'collect.txt' in files else '.collect.txt'
-            yield os.path.join(folder, file_name)
-            
-#Function to hide collect files from user and other scripts that omit hidden files            
-def hide_collect_txt_files(path):
-    path = os.path.abspath(path)
-    for folder, _, files in os.walk(path):
-        if 'collect.txt' in files:
-            old_path = os.path.join(folder, 'collect.txt')
-            new_path = os.path.join(folder, '.collect.txt')
-            os.rename(old_path, new_path)
-            print(f'Renamed {old_path} to {new_path}')
 
-# Function to parse collect.txt file and extract date and categories
-def parse_collect_txt(file_path):
-    date = None
+def log(msg, verbose=False):
+    if verbose:
+        print(msg)
+
+
+# ---------- Discovery ----------
+
+TXT_NAMES = ("collect.txt", ".collect.txt")
+YAML_NAMES = (
+    "collect.yaml", ".collect.yaml",
+    "collect.yml", ".collect.yml",
+)
+
+def _collect_file_in_dir(d: Path):
+    """Return the highest-priority collect file in a dir, preferring hidden and YAML."""
+    # Prefer hidden YAML, then visible YAML, then hidden txt, then visible txt
+    prefs = [
+        ".collect.yaml", ".collect.yml",
+        "collect.yaml", "collect.yml",
+        ".collect.txt", "collect.txt",
+    ]
+    for name in prefs:
+        p = d / name
+        if p.exists():
+            return p
+    return None
+
+def find_collect_files(root: Path):
+    root = root.resolve()
+    for p in root.rglob("*"):
+        if p.is_dir():
+            f = _collect_file_in_dir(p)
+            if f is not None:
+                yield f
+
+
+# ---------- Parsing ----------
+
+def _validate_iso_date(s: str) -> str | None:
+    try:
+        _ = _date.fromisoformat(s)
+        return s
+    except Exception:
+        return None
+
+def _normalize_categories(categories):
+    if categories is None:
+        return []
+    if isinstance(categories, str):
+        parts = [c.strip() for c in categories.split(",")]
+    elif isinstance(categories, (list, tuple)):
+        parts = [str(c).strip() for c in categories]
+    else:
+        parts = []
+    # dedupe, preserve order
+    seen, out = set(), []
+    for c in parts:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+def parse_txt(f: Path, verbose=False):
+    date_val = None
     categories = []
-    with open(file_path, 'r') as f:
-        for line in f:
-            if line.lower().startswith('date:'):
-                date = line.strip().split(':')[1]
-            elif line.lower().startswith('category:'):
-                categories.append(line.strip().split(':')[1])
-    print(f'Parsed {file_path}: Date={date}, Categories={categories}')
-    return date, categories
+    try:
+        with f.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                lower = line.lower()
+                if lower.startswith("date:"):
+                    date_val = line.split(":", 1)[1].strip()
+                elif lower.startswith("category:"):
+                    cats = line.split(":", 1)[1].strip()
+                    categories.extend([c.strip() for c in cats.split(",") if c.strip()])
+    except Exception as e:
+        print(f"ERROR reading {f}: {e}")
+        return None, []
 
-# Function to create symbolic links based on the categories and date
-def create_sym_links(collect_txt_path, date, categories, base_collect_path):
-    folder_path = os.path.abspath(os.path.dirname(collect_txt_path))
-    for category in categories:
-        target_path = os.path.join(base_collect_path, 'Category', category)
-        Path(target_path).mkdir(parents=True, exist_ok=True)
-        sym_link_path = os.path.join(target_path, os.path.basename(folder_path))
-        if not os.path.exists(sym_link_path):
-            os.symlink(folder_path, sym_link_path)
-            print(f'Sym link created: {sym_link_path} -> {folder_path}')
+    if date_val:
+        iso = _validate_iso_date(date_val)
+        if not iso:
+            print(f"WARNING {f}: invalid ISO date '{date_val}'. Expected YYYY-MM-DD. Skipping date.")
+            date_val = None
+
+    cats = _normalize_categories(categories)
+    log(f"Parsed (txt) {f}: Date={date_val}, Categories={cats}", verbose)
+    return date_val, cats
+
+def parse_yaml(f: Path, verbose=False):
+    if not _HAVE_YAML:
+        print(f"WARNING: {f} is YAML but PyYAML not installed. `pip install pyyaml` to enable.")
+        return None, []
+    try:
+        with f.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except Exception as e:
+        print(f"ERROR reading YAML {f}: {e}")
+        return None, []
+
+    date_val = data.get("date")
+    if date_val:
+        iso = _validate_iso_date(str(date_val))
+        if not iso:
+            print(f"WARNING {f}: invalid ISO date '{date_val}'. Expected YYYY-MM-DD. Skipping date.")
+            date_val = None
+
+    cats = _normalize_categories(data.get("categories"))
+    log(f"Parsed (yaml) {f}: Date={date_val}, Categories={cats}", verbose)
+    return date_val, cats
+
+
+def parse_collect_file(f: Path, verbose=False):
+    if f.name in YAML_NAMES:
+        return parse_yaml(f, verbose)
+    return parse_txt(f, verbose)
+
+
+# ---------- Indexing ----------
+
+def ensure_dir(p: Path, dry_run=False, verbose=False):
+    if dry_run:
+        log(f"[dry-run] mkdir -p {p}", verbose)
+        return
+    p.mkdir(parents=True, exist_ok=True)
+
+def make_symlink(link_path: Path, target: Path, *, force=False, dry_run=False, verbose=False):
+    if link_path.exists() or link_path.is_symlink():
+        if link_path.is_symlink():
+            try:
+                current = link_path.resolve()
+            except Exception:
+                current = None
+            if current == target.resolve():
+                log(f"Link ok: {link_path} -> {target}", verbose)
+                return
+        if not force:
+            log(f"Exists (use --force to replace): {link_path}", verbose)
+            return
+        if dry_run:
+            log(f"[dry-run] rm -rf {link_path}", verbose)
         else:
-            print(f'Sym link already exists: {sym_link_path}')
+            if link_path.is_dir() and not link_path.is_symlink():
+                shutil.rmtree(link_path)
+            else:
+                link_path.unlink(missing_ok=True)
 
-    target_path = os.path.join(base_collect_path, 'Date', date)
-    Path(target_path).mkdir(parents=True, exist_ok=True)
-    sym_link_path = os.path.join(target_path, os.path.basename(folder_path))
-    if not os.path.exists(sym_link_path):
-        os.symlink(folder_path, sym_link_path)
-        print(f'Sym link created: {sym_link_path} -> {folder_path}')
-    else:
-        print(f'Sym link already exists: {sym_link_path}')
-
-# Function to remove directories at the specified path
-def remove_directories(collect_path):
-    if not os.path.exists(collect_path):
-        print(f'Directory not found: {collect_path}')
+    if dry_run:
+        log(f"[dry-run] ln -s {target} {link_path}", verbose)
         return
+    try:
+        link_path.symlink_to(target, target_is_directory=True)
+        log(f"Symlink created: {link_path} -> {target}", verbose)
+    except OSError as e:
+        print(f"ERROR creating symlink {link_path} -> {target}: {e}")
 
-    date_path = os.path.join(collect_path, 'Date')
-    category_path = os.path.join(collect_path, 'Category')
+def index_entry(collect_root: Path, source_dir: Path, date_str: str | None, categories,
+                *, force=False, dry_run=False, verbose=False, group_dates=False):
+    # Category links
+    for cat in categories:
+        target_dir = collect_root / "Category" / cat
+        ensure_dir(target_dir, dry_run, verbose)
+        link = target_dir / source_dir.name
+        make_symlink(link, source_dir, force=force, dry_run=dry_run, verbose=verbose)
 
-    if os.path.exists(date_path):
-        shutil.rmtree(date_path)
-        print(f'Removed directory: {date_path}')
-    else:
-        print(f'Date directory not found: {date_path}')
+    # Date links
+    if date_str:
+        if group_dates:
+            y, m, d = date_str.split("-")
+            target_dir = collect_root / "Date" / y / m / d
+        else:
+            target_dir = collect_root / "Date" / date_str
+        ensure_dir(target_dir, dry_run, verbose)
+        link = target_dir / source_dir.name
+        make_symlink(link, source_dir, force=force, dry_run=dry_run, verbose=verbose)
 
-    if os.path.exists(category_path):
-        shutil.rmtree(category_path)
-        print(f'Removed directory: {category_path}')
-    else:
-        print(f'Category directory not found: {category_path}')
-
-
-# Main function
-def main():
-    # Parse command-line arguments
-      parser = argparse.ArgumentParser(description='Process collect.txt files and create sym links.')
-    parser.add_argument('-r', '--remove', action='store_true', help='Remove directories that were created')
-    parser.add_argument('-p', '--path', default='.', help='Path to search for collect.txt files or .collect.txt files')
-    parser.add_argument('-c', '--collect', default='/Users/louismaddalena/Documents/__Collect__', help='Path to create the __Collect__ directory')
-    parser.add_argument('-g', '--hide', action='store_true', help='Hide collect.txt files by renaming them to .collect.txt')
-
-    args = parser.parse_args()
-
-    # If the hide flag is set, rename collect.txt files to .collect.txt and return
-    if args.hide:
-        hide_collect_txt_files(args.path)
-        return
-
-    # If the remove flag is set, remove the directories and return
-    if args.remove:
-        remove_directories(args.collect)
-        return
-
-    if not os.path.exists(args.collect):
-        os.makedirs(args.collect)
-        os.makedirs(os.path.join(args.collect, 'Date'))
-        os.makedirs(os.path.join(args.collect, 'Category'))
-
-    print(f'Searching for collect.txt files in {args.path}')
-    for collect_txt_path in find_collect_txt_files(args.path):
-        date, categories = parse_collect_txt(collect_txt_path)
-        if date and categories:
-            print(f'Processing {collect_txt_path}')
-            create_sym_links(collect_txt_path, date, categories, args.collect)
-
-    print(f'Sym links created in {args.collect}')
+def remove_indexes(collect_root: Path, *, dry_run=False, verbose=False):
+    for sub in ("Date", "Category"):
+        p = collect_root / sub
+        if p.exists():
+            if dry_run:
+                log(f"[dry-run] rm -rf {p}", verbose)
+            else:
+                shutil.rmtree(p)
+                log(f"Removed {p}", verbose)
+        else:
+            log(f"Not found (skip): {p}", verbose)
 
 
-if __name__ == '__main__':
+# ---------- Commands ----------
+
+def cmd_build(args):
+    root = Path(args.path).resolve()
+    collect_root = Path(args.collect).resolve()
+
+    ensure_dir(collect_root / "Date", dry_run=args.dry_run, verbose=args.verbose)
+    ensure_dir(collect_root / "Category", dry_run=args.dry_run, verbose=args.verbose)
+
+    print(f"Scanning for collect files in {root}")
+    count = 0
+    for f in find_collect_files(root):
+        d, cats = parse_collect_file(f, verbose=args.verbose)
+        if not cats:
+            continue
+        index_entry(
+            collect_root,
+            f.parent.resolve(),
+            d,
+            cats,
+            force=args.force,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            group_dates=args.group_dates,
+        )
+        count += 1
+    print(f"Processed {count} collect file(s). Index at: {collect_root}")
+
+def cmd_remove(args):
+    collect_root = Path(args.collect).resolve()
+    ensure_dir(collect_root, dry_run=args.dry_run, verbose=args.verbose)
+    remove_indexes(collect_root, dry_run=args.dry_run, verbose=args.verbose)
+
+def cmd_rebuild(args):
+    # remove + build
+    cmd_remove(args)
+    cmd_build(args)
+
+def cmd_hide(args):
+    # macOS: simply rename visible txt/yaml to hidden equivalents
+    root = Path(args.path).resolve()
+    count = 0
+    for f in find_collect_files(root):
+        # Only hide if it's visible form
+        if f.name.startswith("."):
+            continue
+        hidden = f.with_name("." + f.name)
+        if args.dry_run:
+            log(f"[dry-run] mv {f} {hidden}", args.verbose)
+        else:
+            f.rename(hidden)
+            log(f"Renamed {f} -> {hidden}", args.verbose)
+        count += 1
+    print(f"Hid {count} file(s).")
+
+
+# ---------- CLI ----------
+
+def common_flags(ap):
+    ap.add_argument("-p", "--path", default=".", help="Root to search for collect files.")
+    ap.add_argument("-c", "--collect", default=str(Path.home() / "Documents" / "__Collect__"),
+                    help="Path to __Collect__ index root.")
+    ap.add_argument("-n", "--dry-run", action="store_true", help="Show actions without changing anything.")
+    ap.add_argument("-f", "--force", action="store_true", help="Replace existing links/folders when rebuilding.")
+    ap.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
+    ap.add_argument("--group-dates", action="store_true",
+                    help="Use Date/YYYY/MM/DD instead of Date/YYYY-MM-DD.")
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Build a Date/Category symlink index from collect files (txt or YAML)."
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    ap_build = sub.add_parser("build", help="Build or update the symlink index.")
+    common_flags(ap_build)
+    ap_build.set_defaults(func=cmd_build)
+
+    ap_remove = sub.add_parser("remove", help="Remove Date/ and Category/ indexes.")
+    common_flags(ap_remove)
+    ap_remove.set_defaults(func=cmd_remove)
+
+    ap_rebuild = sub.add_parser("rebuild", help="Remove and rebuild the indexes.")
+    common_flags(ap_rebuild)
+    ap_rebuild.set_defaults(func=cmd_rebuild)
+
+    ap_hide = sub.add_parser("hide", help="Rename visible collect files to hidden (prefix with .).")
+    # hide operates on the search root only; index flags not necessary but harmless
+    common_flags(ap_hide)
+    ap_hide.set_defaults(func=cmd_hide)
+
+    args = ap.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
     main()
